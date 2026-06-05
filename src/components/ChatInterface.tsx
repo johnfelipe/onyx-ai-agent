@@ -4,6 +4,7 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Send, Loader2, RotateCcw, Search } from "lucide-react";
 import ChatMessageComponent from "./ChatMessage";
 import SearchPanel from "./SearchPanel";
+import { apiUrl } from "@/lib/api";
 import type { ChatMessage, DocumentResult } from "@/lib/types";
 
 interface StreamPacket {
@@ -64,7 +65,7 @@ export default function ChatInterface() {
     setIsLoading(true);
 
     try {
-      const res = await fetch("/api/chat", {
+      const res = await fetch(apiUrl("/api/chat"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

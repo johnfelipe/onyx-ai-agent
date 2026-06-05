@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { Search, X, ExternalLink, Loader2, FileText } from "lucide-react";
+import { apiUrl } from "@/lib/api";
 import type { DocumentResult } from "@/lib/types";
 
 interface SearchPanelProps {
@@ -22,7 +23,7 @@ export default function SearchPanel({ onClose }: SearchPanelProps) {
     setHasSearched(true);
 
     try {
-      const res = await fetch("/api/search", {
+      const res = await fetch(apiUrl("/api/search"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: query.trim() }),
