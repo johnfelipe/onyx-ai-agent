@@ -25,6 +25,9 @@ function bearerAuthHeader(): Record<string, string> {
   return {};
 }
 
+const FETCH_TIMEOUT = 30000; // 30 seconds
+const STREAM_TIMEOUT = 90000; // 90 seconds for streaming requests
+
 async function loginAndGetCookie(): Promise<string> {
   if (cachedSessionCookie && Date.now() < cookieExpiresAt) {
     return cachedSessionCookie;
@@ -41,9 +44,13 @@ async function loginAndGetCookie(): Promise<string> {
       password: ONYX_PASSWORD,
     }),
     redirect: "manual",
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
   });
 
   if (res.status !== 204 && res.status !== 200) {
+    // Invalidate cache on login failure
+    cachedSessionCookie = null;
+    cookieExpiresAt = 0;
     const text = await res.text();
     throw new Error(`Login failed: ${res.status} ${text}`);
   }
@@ -158,6 +165,7 @@ export async function createChatSession(
     method: "POST",
     headers,
     body: JSON.stringify({ persona_id: personaId }),
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -178,6 +186,7 @@ export async function sendMessage(req: SendMessageRequest): Promise<Response> {
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(STREAM_TIMEOUT),
   });
 
   if (!res.ok) {
@@ -201,6 +210,7 @@ export async function sendMessageNonStreaming(
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(STREAM_TIMEOUT),
   });
 
   if (!res.ok) {
@@ -221,6 +231,7 @@ export async function searchDocuments(query: string, sourceTypes?: string[]) {
     method: "POST",
     headers,
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(STREAM_TIMEOUT),
   });
 
   if (!res.ok) {
@@ -235,6 +246,7 @@ export async function listAgents(): Promise<Agent[]> {
   const res = await fetch(`${ONYX_API_URL}/persona`, {
     method: "GET",
     headers,
+    signal: AbortSignal.timeout(FETCH_TIMEOUT),
   });
 
   if (!res.ok) {

@@ -15,6 +15,15 @@ interface StreamPacket {
   message_id?: number;
   chat_session_id?: string;
   error_msg?: string;
+  user_message_id?: number;
+  reserved_assistant_message_id?: number;
+  placement?: { turn_index: number; tab_index: number };
+  obj?: {
+    type?: string;
+    content?: string;
+    final_documents?: DocumentResult[] | null;
+    stop_reason?: string | null;
+  };
 }
 
 export default function ChatInterface() {
@@ -73,7 +82,7 @@ export default function ChatInterface() {
           chat_session_id: chatSessionId,
           persona_id: selectedAgent,
           parent_message_id: lastMessageId,
-          stream: false,
+          stream: true,
         }),
       });
 
@@ -82,17 +91,90 @@ export default function ChatInterface() {
         throw new Error(errorData.error || `HTTP ${res.status}`);
       }
 
-      const sessionIdHeader = res.headers.get("X-Chat-Session-Id");
-      const data: StreamPacket = await res.json();
-
-      if (sessionIdHeader) {
-        setChatSessionId(sessionIdHeader);
-      } else if (data.chat_session_id) {
-        setChatSessionId(data.chat_session_id);
+      if (!res.body) {
+        throw new Error("No response stream");
       }
 
-      if (data.message_id) {
-        setLastMessageId(data.message_id);
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let currentAnswer = "";
+      let documents: DocumentResult[] = [];
+      let citationInfo: Array<{ citation_num: number; document_id: string }> = [];
+      let messageId: number | null = null;
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() || "";
+
+        for (const event of events) {
+          const line = event.replace(/^data: /, "").trim();
+          if (!line || line === "[DONE]") continue;
+
+          try {
+            const packet: StreamPacket = JSON.parse(line);
+
+            // Session ID from our proxy layer
+            if (packet.type === "session" && packet.chat_session_id) {
+              setChatSessionId(packet.chat_session_id);
+            }
+
+            // Onyx stream: message_delta contains incremental content
+            if (packet.obj?.type === "message_delta" && packet.obj.content) {
+              currentAnswer = packet.obj.content;
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantMessage.id
+                    ? { ...msg, content: currentAnswer }
+                    : msg
+                )
+              );
+            }
+
+            // Onyx stream: message_start may contain documents
+            if (packet.obj?.type === "message_start" && packet.obj.final_documents) {
+              documents = packet.obj.final_documents;
+            }
+
+            // Non-streaming fallback: answer field directly
+            if (packet.answer !== undefined) {
+              currentAnswer = packet.answer;
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === assistantMessage.id
+                    ? { ...msg, content: currentAnswer }
+                    : msg
+                )
+              );
+            }
+
+            if (packet.top_documents && packet.top_documents.length > 0) {
+              documents = packet.top_documents;
+            }
+
+            if (packet.citation_info && packet.citation_info.length > 0) {
+              citationInfo = packet.citation_info;
+            }
+
+            if (packet.message_id) {
+              messageId = packet.message_id;
+            }
+
+            if (packet.reserved_assistant_message_id) {
+              messageId = packet.reserved_assistant_message_id;
+            }
+          } catch {
+            // Skip non-JSON lines
+          }
+        }
+      }
+
+      if (messageId) {
+        setLastMessageId(messageId);
       }
 
       setMessages((prev) =>
@@ -100,15 +182,15 @@ export default function ChatInterface() {
           msg.id === assistantMessage.id
             ? {
                 ...msg,
-                content: data.answer || "No se recibió respuesta.",
-                documents: data.top_documents,
-                citations: data.citation_info?.map((c) => ({
+                content: currentAnswer || "No se recibió respuesta.",
+                documents,
+                citations: citationInfo.map((c) => ({
                   citation_num: c.citation_num,
                   document_id: c.document_id,
-                  link: data.top_documents?.find(
+                  link: documents.find(
                     (d) => d.document_id === c.document_id
                   )?.link,
-                  title: data.top_documents?.find(
+                  title: documents.find(
                     (d) => d.document_id === c.document_id
                   )?.semantic_identifier,
                 })),
@@ -125,7 +207,7 @@ export default function ChatInterface() {
           msg.id === assistantMessage.id
             ? {
                 ...msg,
-                content: `Error: ${errMsg}. Verifica que la URL y API Key de Onyx estén configuradas correctamente.`,
+                content: `Error: ${errMsg}. Verifica la conexión con Onyx.`,
                 isStreaming: false,
               }
             : msg

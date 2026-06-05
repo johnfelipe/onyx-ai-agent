@@ -1,6 +1,8 @@
 import { createChatSession, sendMessage, sendMessageNonStreaming } from "@/lib/onyx";
 import { NextRequest } from "next/server";
 
+export const maxDuration = 120;
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -35,14 +37,72 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const responseHeaders = new Headers({
-        "Content-Type": "text/event-stream",
-        "Cache-Control": "no-cache",
-        Connection: "keep-alive",
-        "X-Chat-Session-Id": sessionId,
+      const reader = onyxResponse.body.getReader();
+      const decoder = new TextDecoder();
+
+      const readableStream = new ReadableStream({
+        async start(controller) {
+          // Send session ID as first event
+          controller.enqueue(
+            new TextEncoder().encode(
+              `data: ${JSON.stringify({ type: "session", chat_session_id: sessionId })}\n\n`
+            )
+          );
+
+          let buffer = "";
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+
+              buffer += decoder.decode(value, { stream: true });
+              const lines = buffer.split("\n");
+              buffer = lines.pop() || "";
+
+              for (const line of lines) {
+                const trimmed = line.trim();
+                if (!trimmed) continue;
+                try {
+                  JSON.parse(trimmed);
+                  controller.enqueue(
+                    new TextEncoder().encode(`data: ${trimmed}\n\n`)
+                  );
+                } catch {
+                  // Not valid JSON, skip
+                }
+              }
+            }
+
+            // Process remaining buffer
+            if (buffer.trim()) {
+              try {
+                JSON.parse(buffer.trim());
+                controller.enqueue(
+                  new TextEncoder().encode(`data: ${buffer.trim()}\n\n`)
+                );
+              } catch {
+                // skip
+              }
+            }
+
+            controller.enqueue(
+              new TextEncoder().encode(`data: [DONE]\n\n`)
+            );
+            controller.close();
+          } catch (err) {
+            controller.error(err);
+          }
+        },
       });
 
-      return new Response(onyxResponse.body, { headers: responseHeaders });
+      return new Response(readableStream, {
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          Connection: "keep-alive",
+          "X-Chat-Session-Id": sessionId,
+        },
+      });
     } else {
       const result = await sendMessageNonStreaming({
         message,
@@ -58,7 +118,10 @@ export async function POST(request: NextRequest) {
       });
     }
   } catch (error) {
-    const errMsg = error instanceof Error ? error.message : "Unknown error";
+    let errMsg = error instanceof Error ? error.message : "Unknown error";
+    if (error instanceof Error && error.name === "TimeoutError") {
+      errMsg = "La instancia de Onyx no respondió a tiempo. Verifica que esté activa.";
+    }
     console.error("Chat API error:", errMsg);
     return Response.json({ error: errMsg }, { status: 500 });
   }
