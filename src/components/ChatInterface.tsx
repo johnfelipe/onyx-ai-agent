@@ -123,9 +123,9 @@ export default function ChatInterface() {
               setChatSessionId(packet.chat_session_id);
             }
 
-            // Onyx stream: message_delta contains incremental content
+            // Onyx stream: message_delta contains incremental content chunks
             if (packet.obj?.type === "message_delta" && packet.obj.content) {
-              currentAnswer = packet.obj.content;
+              currentAnswer += packet.obj.content;
               setMessages((prev) =>
                 prev.map((msg) =>
                   msg.id === assistantMessage.id
